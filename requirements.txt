@@ -1,0 +1,15 @@
+# ── Core pipeline ─────────────────────────────────────────
+langgraph>=0.2.0
+langchain-groq>=0.2.0
+langchain-core>=0.3.0
+cohere>=5.0
+pymongo>=4.6
+python-dotenv>=1.0
+
+# ── Evaluation ────────────────────────────────────────────
+ragas>=0.1.10
+datasets>=2.18
+langchain-openai>=0.2.0    # optional: if using OpenAI as RAGAS evaluator
+
+# ── LiveKit (production only, not needed for evaluation) ──
+# livekit-agents>=1.3.12

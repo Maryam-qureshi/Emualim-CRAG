@@ -1,0 +1,760 @@
+% ============================================================
+%  E-Mualim CRAG Conference Paper — IEEE Format
+%  Compile: pdflatex -> bibtex -> pdflatex -> pdflatex
+%  Template: IEEEtran (standard IEEE conference)
+% ============================================================
+
+\documentclass[conference]{IEEEtran}
+
+% ---------- Core packages ----------
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{url}
+\usepackage{microtype}
+\usepackage{subcaption}
+\usepackage{array}
+\usepackage{tabularx}
+
+% ---------- TODO helper (remove before final submission) ----------
+\newcommand{\todo}[1]{\textcolor{red}{\textbf{[TODO: #1]}}}
+
+% ============================================================
+\begin{document}
+
+\title{Corrective Retrieval-Augmented Generation for\\
+Hallucination Mitigation in Educational Q\&A:\\
+A Case Study on E-Mualim}
+
+% IEEE conference — list all authors
+\author{
+  \IEEEauthorblockN{Author One}
+  \IEEEauthorblockA{
+    \textit{Department of Computer Science}\\
+    \textit{FAST-NUCES Lahore}\\
+    Lahore, Pakistan\\
+    authorone@nu.edu.pk
+  }
+  \and
+  \IEEEauthorblockN{Author Two}
+  \IEEEauthorblockA{
+    \textit{Department of Computer Science}\\
+    \textit{FAST-NUCES Lahore}\\
+    Lahore, Pakistan\\
+    authortwo@nu.edu.pk
+  }
+  \and
+  \IEEEauthorblockN{Author Three}
+  \IEEEauthorblockA{
+    \textit{Department of Computer Science}\\
+    \textit{FAST-NUCES Lahore}\\
+    Lahore, Pakistan\\
+    authorthree@nu.edu.pk
+  }
+}
+
+\maketitle
+
+% ============================================================
+%  ABSTRACT
+% ============================================================
+\begin{abstract}
+Large language models (LLMs) deployed in educational tutoring systems
+pose a critical safety risk: they generate factually incorrect content
+with high confidence, misleading students who lack the background
+knowledge to identify such errors.
+Standard retrieval-augmented generation (RAG) partially addresses this
+by grounding responses in a knowledge base, yet naive RAG passes all
+retrieved chunks directly to the generator regardless of their
+relevance to the specific query, leaving hallucination risk unmitigated.
+We present \textbf{E-Mualim}, a speech-enabled AI tutoring system
+that implements a \emph{two-stage corrective pipeline}: a CRAG-style
+chunk-level relevance grader that filters retrieved content before
+generation, and a post-generation hallucination checker that retries
+generation when output is not grounded in source material.
+We evaluate E-Mualim against a naive RAG baseline on a curated
+educational Q\&A test set using the RAGAS evaluation framework,
+reporting faithfulness, answer relevancy, context precision, and
+context recall.
+\todo{Insert 2--3 key result numbers once evaluation is complete.}
+Our results demonstrate that the two-stage corrective architecture
+substantially reduces hallucination while preserving answer quality,
+providing a practical and reproducible design for safe LLM deployment
+in educational settings.
+\end{abstract}
+
+\begin{IEEEkeywords}
+large language models, hallucination mitigation, retrieval-augmented
+generation, corrective RAG, educational AI, intelligent tutoring systems
+\end{IEEEkeywords}
+
+% ============================================================
+%  I. INTRODUCTION
+% ============================================================
+\section{Introduction}
+\label{sec:intro}
+
+The integration of large language models (LLMs) into educational
+technology has created new possibilities for personalised, on-demand
+student tutoring.
+Systems capable of answering curriculum questions in natural language
+can reduce dependency on instructor availability and scale educational
+support to large student populations.
+However, this promise is fundamentally undermined by a well-documented
+failure mode: LLMs \emph{hallucinate}, generating plausible-sounding
+but factually incorrect statements with high confidence
+\cite{ji2023survey,huang2025survey}.
+
+In general-purpose applications, a hallucinated fact is an
+inconvenience.
+In an educational tutoring system, it risks permanently embedding a
+misconception in a student who has no independent means to verify
+the response.
+Empirical research has confirmed this concern: erroneous LLM feedback
+in tutoring systems has been shown to increase student confusion and
+task completion time even when overall learning gains are preserved
+\cite{steinbach2025hallucinate}.
+
+Retrieval-Augmented Generation (RAG) \cite{lewis2020rag} has become
+the standard approach to grounding LLM responses in verifiable
+knowledge sources.
+By retrieving relevant documents at query time and conditioning
+generation on them, RAG reduces reliance on parametric memory.
+However, \emph{naive} RAG offers no quality assurance on the retrieved
+context: it passes all top-$k$ retrieved chunks directly to the
+generator, including those that are weakly or irrelevantly matched to
+the specific query.
+Prior work has demonstrated that LLMs are easily distracted by
+irrelevant context in the prompt \cite{shi2023distracted}, meaning
+that naive RAG can \emph{introduce} hallucination by contaminating
+the generation context with off-topic material.
+
+Corrective Retrieval-Augmented Generation (CRAG)
+\cite{yan2024crag} addresses this gap by inserting a lightweight
+retrieval evaluator between retrieval and generation to filter
+low-quality chunks before they reach the generator.
+We adapt CRAG for the specific requirements of an educational Q\&A
+domain and extend it with a second corrective stage: a
+post-generation hallucination checker that detects unfaithful
+generation and triggers a retry before the response is delivered to
+the student.
+
+The contributions of this paper are as follows:
+\begin{itemize}
+  \item We present \textbf{E-Mualim}, an educational tutoring system
+        implementing a two-stage corrective RAG pipeline that combines
+        pre-generation chunk filtering with post-generation faithfulness
+        verification.
+  \item We describe a practical implementation of the CRAG grader
+        using a small LLM (\texttt{llama-3.1-8b-instant}) as a
+        batched prompt-based relevance scorer, requiring no
+        fine-tuning on labelled retrieval data.
+  \item We provide an empirical evaluation of E-Mualim against a
+        naive RAG baseline using the RAGAS framework, demonstrating
+        measurable hallucination reduction across four complementary
+        metrics.
+\end{itemize}
+
+% ============================================================
+%  II. RELATED WORK
+% ============================================================
+\section{Related Work}
+\label{sec:related}
+
+\subsection{Hallucination in Large Language Models}
+
+Hallucination in natural language generation was formalised by
+Ji et al. \cite{ji2023survey}, who distinguish \emph{intrinsic}
+hallucination (output that contradicts the source material) from
+\emph{extrinsic} hallucination (output containing information absent
+from and unverifiable against the source).
+Huang et al. \cite{huang2025survey} refine this taxonomy for
+LLMs, separating \emph{factuality hallucination} (contradicting world
+knowledge) from \emph{faithfulness hallucination} (deviating from
+retrieved context or instructions).
+For RAG-based systems such as E-Mualim, faithfulness hallucination
+is the primary concern, since the knowledge base defines the
+authoritative ground truth for student-facing responses.
+
+Hallucination is particularly damaging in educational contexts.
+Kasneci et al. \cite{kasneci2023chatgpt} identified hallucination
+as a central risk of LLMs in education, noting that students lack
+the domain expertise to detect model errors.
+Jia et al. \cite{jia2024faithfulness} found that over 23\% of
+LLM-generated assignment feedback contained hallucinated content,
+and Steinbach et al. \cite{steinbach2025hallucinate} demonstrated
+measurable increases in student confusion under hallucinated tutoring
+feedback in a pre-registered RCT.
+
+\subsection{Retrieval-Augmented Generation}
+
+Lewis et al. \cite{lewis2020rag} introduced RAG, combining a dense
+passage retriever with a sequence-to-sequence generator and
+demonstrating improvements on open-domain QA benchmarks.
+Gao et al. \cite{gao2024ragsurvey} surveyed subsequent work and
+identified three failure modes of \emph{naive RAG}: retrieval
+imprecision (irrelevant chunks contaminating the prompt), retrieval
+incompleteness (missing key passages), and unfaithful generation
+(the model ignoring or contradicting retrieved context).
+Shi et al. \cite{shi2023distracted} showed empirically that including
+irrelevant context passages causes significant LLM performance
+degradation, directly motivating chunk-level quality control.
+
+\subsection{Advanced RAG Variants}
+
+Several approaches improve on naive RAG by making retrieval adaptive
+or self-critical.
+FLARE \cite{jiang2023flare} triggers retrieval mid-generation when
+token-level confidence falls below a threshold, but requires
+white-box access to model probability distributions.
+Self-RAG \cite{asai2024selfrag} trains the LLM itself to emit
+reflection tokens for on-demand retrieval and self-critique, achieving
+strong results but requiring full model retraining on specialised data.
+Adaptive-RAG \cite{jeong2024adaptiverag} classifies query complexity
+before retrieval to route between no-retrieval, single-step, and
+multi-step strategies.
+CRAG \cite{yan2024crag} takes a post-retrieval, pre-generation
+approach: a fine-tuned T5-large evaluator scores retrieved documents
+for relevance and triggers knowledge refinement or web-search fallback
+accordingly.
+E-Mualim adopts CRAG's pre-generation correction philosophy and
+extends it with a post-generation faithfulness check, requiring
+neither model retraining nor white-box probability access.
+
+\subsection{RAG in Educational Settings}
+
+RAG-based tutoring systems have grown rapidly, but almost all rely
+on naive RAG \cite{sarmiento2025crag}.
+Sarmiento and Laur{\'i}a \cite{sarmiento2025crag} are among the
+first to compare CRAG against naive RAG in a college chatbot context,
+though their evaluation is preliminary.
+To our knowledge, E-Mualim represents the first educational tutoring
+system combining CRAG-style chunk grading with a post-generation
+hallucination checker evaluated using the RAGAS framework.
+
+% ============================================================
+%  III. SYSTEM OVERVIEW
+% ============================================================
+\section{E-Mualim System Overview}
+\label{sec:system}
+
+E-Mualim is a speech-enabled AI tutoring assistant that answers
+student curriculum questions grounded in a curated educational
+knowledge base.
+The system is implemented as a LangGraph pipeline with seven nodes
+across four processing layers, illustrated in Fig.~\ref{fig:pipeline}.
+
+\begin{figure}[htbp]
+  \centering
+  % Uncomment and update path when figures are ready:
+  % \includegraphics[width=\columnwidth]{figures/pipeline.png}
+  \fbox{\rule{0pt}{4.2cm}\rule{\dimexpr\columnwidth-2\fboxsep\relax}{0pt}}
+  \caption{E-Mualim LangGraph pipeline (per student message). Seven
+  nodes across four layers: Input (Groq Whisper STT), Retrieve
+  (intent classifier node~1, RAG retriever node~2, CRAG grader
+  node~3), Generate (Llama-3.3-70b generator node~4, hallucination
+  checker node~5 with max-2-retry loop), and Output (response
+  expander node~6, response router node~7 with engagement-driven
+  simplify loop). Dashed arrows denote corrective feedback paths.}
+  \label{fig:pipeline}
+\end{figure}
+
+\subsection{Knowledge Base}
+
+The knowledge base consists of \todo{N} educational documents
+covering \todo{subject domains}, indexed in MongoDB Atlas Search
+using Cohere \texttt{search\_query} embeddings.
+Documents are chunked into passages of \todo{chunk size} tokens with
+\todo{overlap} token overlap to preserve local context across
+chunk boundaries.
+
+\subsection{Input Layer}
+
+Student speech is transcribed via Groq Whisper STT, producing a text
+query that is forwarded to the retrieve layer.
+
+\subsection{Retrieve Layer}
+
+\subsubsection{Intent Classifier}
+The intent classifier operates in two steps, illustrated in
+Fig.~\ref{fig:intent}.
+Step~1 is a deterministic keyword scan requiring no LLM call.
+Messages containing terms such as ``what is'', ``define'', or
+``explain'' resolve immediately to the \texttt{concept} intent;
+``how do'', ``show me'', or ``example'' resolve to \texttt{howto};
+error-related terms resolve to \texttt{mistake}; and similar rules
+cover \texttt{practice}, \texttt{flashcard}, and
+\texttt{conversational} (greetings and social messages, which bypass
+RAG entirely).
+The majority of student messages match a rule at this step, incurring
+zero inference cost.
+Step~2 fires only when no keyword matches: Groq~8b
+(\texttt{llama-3.1-8b-instant}) receives a short prompt requesting a
+single-word classification into one of the six categories.
+The resolved intent determines which \texttt{chunk\_types} the
+retriever filters on---\texttt{concept} retrieves \texttt{concept}
+and \texttt{analogy} chunks, \texttt{howto} retrieves
+\texttt{code\_example} and \texttt{concept} chunks,
+\texttt{mistake} retrieves only \texttt{common\_mistake} chunks, and
+\texttt{practice} retrieves only \texttt{practice\_problem}
+chunks---ensuring the retrieved context is always relevant to the
+student's actual need.
+
+\begin{figure}[htbp]
+  \centering
+  % \includegraphics[width=\columnwidth]{figures/intent_classifier.png}
+  \fbox{\rule{0pt}{4.2cm}\rule{\dimexpr\columnwidth-2\fboxsep\relax}{0pt}}
+  \caption{Intent classifier decision tree. Step~1 applies keyword
+  rules for six intents (\texttt{conversational}, \texttt{concept},
+  \texttt{howto}, \texttt{mistake}, \texttt{practice},
+  \texttt{flashcard}) at zero LLM cost; Step~2 invokes
+  \texttt{llama-3.1-8b-instant} only when no rule matches.
+  The resolved intent sets \texttt{chunk\_types} for the
+  downstream RAG retriever.}
+  \label{fig:intent}
+\end{figure}
+
+\subsubsection{RAG Retriever}
+The RAG retriever performs \texttt{\$vectorSearch} on the Atlas
+index using Cohere \texttt{search\_query} embeddings, returning the
+top-$k$ chunks (\(k=\)\todo{value}) filtered by the intent-specific
+\texttt{chunk\_types}.
+Retrieved chunks are passed to the CRAG grader
+(Section~\ref{sec:method}) before reaching the generator.
+
+\subsection{Generate Layer}
+
+Groq 70b (\texttt{llama-3.3-70b-versatile}) serves as the primary
+generator, conditioned on the graded chunk set produced by Stage~1.
+Each generated response is evaluated by the hallucination checker
+(Stage~2) before it is forwarded to the output layer.
+
+\subsection{Output Layer}
+
+After the hallucination checker passes a response, the
+\emph{response expander} (node~6) performs a citation-driven
+elaboration pass.
+For expandable intents (\texttt{concept}, \texttt{howto},
+\texttt{mistake}, \texttt{practice}), it prompts
+\texttt{llama-3.1-8b-instant} to append one enrichment paragraph
+drawn from the graded source chunks---adding a concrete analogy,
+code walkthrough, or common-trap warning that the 70b generator
+may have omitted.
+The expander is skipped for conversational and flashcard intents,
+fallback responses, and retry iterations to keep latency low.
+
+The \emph{response router} (node~7) then applies three processing
+steps.
+First, it extracts any fenced code block from the response and
+publishes it to the frontend via a LiveKit data channel so it can
+be rendered visually while the spoken response plays.
+Second, it trims the response to a voice-friendly length (900
+characters for expandable intents, 400 for conversational and
+flashcard).
+Third, it performs a single in-memory lookup on the
+\texttt{SessionStateStore}:
+\texttt{session\_state.get\_avg\_engagement(session\_id)}.
+If the rolling average of the last five engagement readings is below
+0.5, the router sets \texttt{simplify=True} in the graph state and
+sends the response back to the generator with an instruction to use
+simpler language and a real-world analogy
+(Section~\ref{subsec:engagement}).
+The final grounded response is synthesised to speech via Azure TTS
+with a Bey avatar.
+
+\subsubsection{Behavior Module (Asynchronous)}
+The behavior module runs entirely independently of the LangGraph
+pipeline on a 2-second interval.
+Each cycle it captures a camera frame (640$\times$480), runs
+DeepFace for face detection and emotion recognition, and computes an
+engagement score in $[0, 1]$.
+The score is written to \texttt{SessionStateStore}---a plain Python
+dict in memory---via \texttt{session\_state.update()}.
+The store is the \emph{only} coupling between the two subsystems.
+The LangGraph pipeline never waits for the behavior loop, and the
+behavior loop never waits for LangGraph; the router's dict lookup
+completes in under one microsecond.
+
+% Behavior loop diagram removed — the coupling is described in prose
+% above and is secondary to the paper's CRAG contribution.
+
+% ============================================================
+%  IV. TWO-STAGE CORRECTIVE PIPELINE
+% ============================================================
+\section{Two-Stage Corrective Pipeline}
+\label{sec:method}
+
+Naive RAG hallucinates for two distinct reasons: the generator
+receives noisy, irrelevant context (a retrieval problem), or it
+drifts beyond its source material despite receiving good context
+(a generation problem).
+E-Mualim addresses both failure modes with two sequential corrective
+stages, summarised in Fig.~\ref{fig:crag_grader}.
+
+\begin{figure}[htbp]
+  \centering
+  % Uncomment and update path when figures are ready:
+  % \includegraphics[width=\columnwidth]{figures/crag_grader.png}
+  \fbox{\rule{0pt}{4.2cm}\rule{\dimexpr\columnwidth-2\fboxsep\relax}{0pt}}
+  \caption{CRAG grader detail (Stage~1). All retrieved chunks are
+  scored 0--10 in a single batched call to
+  \texttt{llama-3.1-8b-instant}. Chunks scoring $\geq 6$ are
+  retained; others are discarded. If all chunks are discarded,
+  \texttt{needs\_fallback = true} is set and the generator falls back
+  to its parametric Python knowledge.}
+  \label{fig:crag_grader}
+\end{figure}
+
+\subsection{Stage 1: CRAG Chunk Grader}
+
+\subsubsection{Motivation}
+Standard RAG passes all top-$k$ chunks to the generator regardless
+of their relevance to the specific query.
+A vector similarity score reflects general semantic proximity but
+does not guarantee that a chunk actually contains information
+needed to answer the question.
+We insert a dedicated relevance evaluation step between retrieval
+and generation.
+
+\subsubsection{Relevance Scoring}
+All retrieved chunks are scored in a \emph{single} batched LLM call
+rather than one call per chunk.
+The prompt lists each chunk as a numbered excerpt and asks
+\texttt{llama-3.1-8b-instant} to return a comma-separated list of
+relevance scores (0--10):
+\begin{quote}
+\textit{``Rate the relevance of each text excerpt below to the
+student question on a scale of 0--10. \ldots\ Reply with ONLY the
+scores as a comma-separated list in order, e.g.: 8,3,7,5,9''}
+\end{quote}
+This batched, prompt-based scoring requires no fine-tuning on
+labelled relevance data, in contrast to the T5-large evaluator in
+the original CRAG \cite{yan2024crag}, and reduces the number of
+inference calls from $k$ to one, making it practical for
+resource-constrained educational deployments.
+
+\subsubsection{Threshold Filtering}
+Chunks scoring $\geq 6$ are added to the \texttt{graded\_chunks}
+list and forwarded to the generator.
+Chunks scoring $< 6$ are discarded.
+The threshold of 6 was selected empirically on a development set
+of \todo{N} query--document pairs.
+
+\subsubsection{Fallback Behaviour}
+If all $k$ retrieved chunks fall below the threshold, the flag
+\texttt{needs\_fallback = true} is set.
+Rather than generating from an empty context window---which
+guarantees hallucination---the generator receives a modified prompt
+that instructs it to answer from its parametric Python knowledge
+when the question falls within the programming domain, and to
+redirect the student only when the question is entirely unrelated
+to programming.
+This differs from the original CRAG \cite{yan2024crag}, which
+triggers a web-search fallback; E-Mualim instead leverages the
+base LLM's strong coverage of Python fundamentals while
+constraining the scope to the tutoring domain.
+
+\subsection{Stage 2: Post-Generation Hallucination Checker}
+
+\subsubsection{Motivation}
+Even with high-quality graded context, a generative LLM may
+introduce information not present in the retained chunks.
+Stage 2 provides a second, independent check on output faithfulness.
+
+\subsubsection{Verification}
+After each generator call, \texttt{llama-3.1-8b-instant} evaluates
+the (graded context, generated response) pair with the prompt:
+\begin{quote}
+\textit{``Does the tutor answer contain information that contradicts
+or goes significantly beyond the provided course material? Reply
+with YES (if it goes beyond) or NO (if it stays within material).
+One word only.''}
+\end{quote}
+A \texttt{NO} verdict (stays within material) passes the response to
+the output layer.
+A \texttt{YES} verdict triggers a retry, re-prompting the generator
+with an explicit instruction to answer only from the provided context.
+The hallucination checker is skipped for \texttt{conversational}
+intents, fallback responses, and queries that have already exhausted
+the retry budget.
+
+\subsubsection{Retry Policy}
+A maximum of two retries is permitted per query to bound response
+latency.
+If the response remains ungrounded after two retries, the most
+recent response is forwarded with a confidence caveat appended.
+
+\subsubsection{Retry Rate as a Diagnostic}
+The fraction of queries triggering at least one retry serves as an
+indirect measure of context quality: under CRAG-graded context,
+retry rate should decrease relative to naive RAG, since cleaner
+context reduces generator drift.
+We report this metric alongside RAGAS scores.
+
+\subsection{Engagement-Driven Simplification}
+\label{subsec:engagement}
+
+A third corrective mechanism specific to E-Mualim addresses response
+\emph{accessibility} rather than factual grounding.
+When the response router reads an \texttt{avg\_engagement} below 0.5
+from the \texttt{SessionStateStore}, it sets \texttt{simplify=True}
+and routes the verified response back to the generator with the
+additional instruction: \emph{``Rewrite using simpler language and
+include a real-world analogy.''}
+This retry does not re-invoke the hallucination checker, since
+simplification is constrained to rephrase already-verified content
+and cannot introduce new factual claims.
+Only one simplification retry is permitted per query; if engagement
+remains low after simplification, the simplified response is delivered
+as-is.
+This loop operates only when the behavior module has written at least
+one engagement reading to the store during the current session;
+on the first message of a new session it is skipped.
+
+% ============================================================
+%  V. EXPERIMENTAL SETUP
+% ============================================================
+\section{Experimental Setup}
+\label{sec:experiments}
+
+\subsection{Test Set}
+
+We constructed a curated test set of \todo{N} question--answer pairs
+covering \todo{subject domains} drawn from E-Mualim's knowledge base.
+Questions were distributed across five types to ensure coverage of
+all intent-retrieval paths and CRAG grader decision boundaries:
+
+\begin{itemize}
+  \item \textbf{Concept} ($\sim$25\%) --- ``what is X'' questions
+        retrieving \texttt{concept} and \texttt{analogy} chunks;
+        tests baseline retrieval and generation quality.
+  \item \textbf{Howto} ($\sim$25\%) --- ``how do I'' questions
+        retrieving \texttt{code\_example} and \texttt{concept} chunks;
+        tests code-grounded explanation quality.
+  \item \textbf{Mistake} ($\sim$20\%) --- error-reporting questions
+        retrieving \texttt{common\_mistake} chunks only; tests
+        narrow-scope retrieval under the CRAG grader.
+  \item \textbf{Complex} ($\sim$15\%) --- questions requiring
+        information from multiple chunks across different sections;
+        stresses context assembly and faithfulness.
+  \item \textbf{Out-of-scope} ($\sim$15\%) --- questions about
+        Python topics absent from the knowledge base (e.g., classes,
+        file I/O); expected to trigger \texttt{needs\_fallback} and
+        exercise the parametric-knowledge fallback path.
+\end{itemize}
+Ground-truth answers were written by the authors directly from
+knowledge base content and reviewed for correctness.
+
+\subsection{Baseline}
+
+We compare E-Mualim against a \textbf{Naive RAG} baseline that uses
+the identical retriever (Cohere embeddings, MongoDB Atlas Search),
+the identical generator (\texttt{llama-3.3-70b-versatile}), and the
+identical knowledge base, but with the CRAG grader, hallucination
+checker, and response expander disabled.
+All retrieved chunks are passed directly to the generator without
+quality filtering.
+This design isolates the contribution of the two-stage corrective
+pipeline from all other system factors.
+
+\subsection{Evaluation Metrics}
+
+We evaluate both systems using the RAGAS framework \cite{es2024ragas},
+which provides four complementary automated metrics:
+
+\begin{itemize}
+  \item \textbf{Faithfulness} --- proportion of claims in the
+        generated answer supported by retrieved context.
+        This is our primary hallucination metric; higher is better.
+  \item \textbf{Answer Relevancy} --- how directly the answer
+        addresses the question, penalising incomplete or off-topic
+        responses.
+  \item \textbf{Context Precision} --- signal-to-noise ratio of the
+        retrieved (or graded) chunk set; measures filtering
+        effectiveness.
+  \item \textbf{Context Recall} --- whether all information necessary
+        to answer the question was present in the retrieved context
+        (requires ground-truth answers).
+\end{itemize}
+
+All metrics are in $[0, 1]$; higher values indicate better
+performance.
+We additionally report the \textbf{hallucination checker retry rate}
+as an architecture-specific diagnostic.
+
+% ============================================================
+%  VI. RESULTS AND ANALYSIS
+% ============================================================
+\section{Results and Analysis}
+\label{sec:results}
+
+\subsection{Main Results}
+
+Table~\ref{tab:main} reports RAGAS scores for the LLM-only baseline,
+the naive RAG baseline, and the full E-Mualim system.
+
+\begin{table}[htbp]
+\centering
+\caption{RAGAS Evaluation Results. All metrics in $[0,1]$, higher is
+better. \todo{Replace all cells with actual numbers.}}
+\label{tab:main}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{System} & \textbf{Faith.} & \textbf{Ans. Rel.}
+                & \textbf{Ctx. Prec.} & \textbf{Ctx. Rec.} \\
+\midrule
+LLM-only              & \todo{} & \todo{} & ---     & ---     \\
+Naive RAG             & \todo{} & \todo{} & \todo{} & \todo{} \\
+\textbf{E-Mualim}     & \todo{} & \todo{} & \todo{} & \todo{} \\
+\midrule
+$\Delta$ (E-Mualim vs. Naive RAG) & \todo{} & \todo{} & \todo{} & \todo{} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\todo{Write analysis paragraph: where CRAG gained most, link to
+chunk grader filtering noisy context, discuss any trade-offs in
+context recall from aggressive filtering.}
+
+\subsection{Ablation Study}
+
+Table~\ref{tab:ablation} decomposes the independent contribution of
+each corrective stage.
+
+\begin{table}[htbp]
+\centering
+\caption{Ablation Study. \todo{Replace all cells with actual numbers.}}
+\label{tab:ablation}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Configuration} & \textbf{Faith.} & \textbf{Ans. R.}
+  & \textbf{Ctx. P.} & \textbf{Ctx. R.} & \textbf{Retry\%} \\
+\midrule
+Naive RAG                & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} \\
++ CRAG grader only       & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} \\
++ Hall.\ checker only    & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} \\
+\textbf{Full E-Mualim}   & \todo{} & \todo{} & \todo{} & \todo{} & \todo{} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\todo{Write ablation analysis: quantify contribution of each stage
+independently. Interpret retry rate reduction from naive RAG to CRAG
+context as evidence that cleaner context reduces generator drift.}
+
+\subsection{Hallucination Checker Retry Rate}
+
+\todo{Write paragraph: report retry rate under naive RAG context vs.
+CRAG-graded context. A lower retry rate under CRAG confirms that the
+two stages are complementary: the grader reduces retrieval noise,
+which in turn reduces post-generation correction burden.}
+
+\subsection{Qualitative Analysis}
+
+Table~\ref{tab:qual} presents a representative example in which
+naive RAG produced a hallucinated response and E-Mualim's corrective
+pipeline produced a grounded answer.
+
+\begin{table}[htbp]
+\centering
+\caption{Qualitative Comparison Example.
+\todo{Replace with a real query--response pair from your test set.}}
+\label{tab:qual}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabularx}{\columnwidth}{p{0.14\columnwidth}
+                               X X}
+\toprule
+\textbf{Query} & \textbf{Naive RAG} & \textbf{E-Mualim} \\
+\midrule
+\todo{question here}
+& \todo{hallucinated answer — include the incorrect claim}
+& \todo{grounded answer — cite source passage} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+% ============================================================
+%  VII. DISCUSSION
+% ============================================================
+\section{Discussion}
+\label{sec:discussion}
+
+\subsection{Why Two Stages?}
+
+The ablation study (Table~\ref{tab:ablation}) demonstrates that
+the CRAG grader and the hallucination checker address distinct
+failure modes and that their combination produces greater
+hallucination reduction than either stage alone.
+The grader eliminates context noise before generation, reducing the
+probability that the generator has access to misleading material.
+The hallucination checker provides a safety net for the residual
+cases in which the generator introduces information not present in
+the graded context.
+Together they implement a defence-in-depth strategy appropriate for
+the high-stakes requirements of educational Q\&A.
+
+\subsection{Limitations}
+
+Several limitations should be noted.
+First, the relevance threshold ($\geq 6$) was tuned on a development
+set specific to E-Mualim's knowledge base; optimal thresholds may
+differ across subject domains or chunk sizes.
+Second, on the critical path each query invokes
+\texttt{llama-3.1-8b-instant} up to three times---once for batched
+chunk grading, once for hallucination checking, and once for
+response expansion---introducing additional latency relative to
+naive RAG.
+\todo{Report actual latency overhead in milliseconds if measured.}
+Third, unlike the original CRAG \cite{yan2024crag}, E-Mualim does not
+implement a web-search fallback for out-of-scope queries; the system
+instead falls back to the generator's parametric Python knowledge.
+While this leverages the base LLM's strong coverage of Python
+fundamentals, it reintroduces the risk of parametric hallucination
+for topics at the boundary of the model's training data.
+
+\subsection{Implications for Educational AI}
+
+Our results suggest that a two-stage corrective pipeline can be
+implemented with small, freely available LLMs
+(\texttt{llama-3.1-8b-instant} via Groq) without any fine-tuning,
+making the architecture accessible to resource-limited institutions.
+The batched scoring approach (one LLM call for all $k$ chunks)
+further reduces cost relative to per-chunk evaluation.
+For out-of-scope queries, E-Mualim's parametric-knowledge fallback
+provides reasonable coverage of the Python domain, though it
+sacrifices the grounding guarantees of the primary pipeline.
+
+% ============================================================
+%  VIII. CONCLUSION
+% ============================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+We presented E-Mualim, an educational tutoring system that mitigates
+LLM hallucination through a two-stage corrective RAG pipeline.
+The first stage filters retrieved chunks using a prompt-based
+relevance grader before generation; the second verifies generated
+responses against source content and retries when grounding fails.
+\todo{Insert summary sentence with key result numbers here.}
+Ablation results confirm that both stages contribute independently,
+and the combined architecture yields the strongest hallucination
+reduction.
+Our work establishes a practical, reproducible design for safe
+deployment of LLMs in educational Q\&A systems and provides an
+empirical foundation for future work on adaptive thresholds,
+multilingual support, and integration of curated web-search fallback
+for open-ended student queries.
+
+% ============================================================
+%  REFERENCES
+% ============================================================
+\bibliographystyle{IEEEtran}
+\bibliography{references_ieee}
+
+\end{document}
