@@ -66,7 +66,7 @@ emualim-crag/
 ### Installation
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/emualim-crag.git
+git clone https://github.com/Maryam-qureshi/emualim-crag.git
 cd emualim-crag
 python -m venv venv
 source venv/bin/activate        # Linux/macOS
